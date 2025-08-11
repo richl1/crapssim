@@ -41,7 +41,7 @@ class HeatSeeker(Strategy):
         b. Never have > 3 units "at_risk" if a seven rolls: at_risk = 
                 +sum of Come/Pass contract bets
                 +sum of Place bets
-                - 1 (if +1 or more for shooter)
+                - 1 (if won +1 or more for this shooter)
                 - 1 (if new bet includes Come or Pass)
         d. Prefer new 6/8 place bets to new Come/Pass bets.
         e. Remove Place bets to meet "at_risk" rule
@@ -50,14 +50,13 @@ class HeatSeeker(Strategy):
         self,
         pass_come_amount: float = 5,
         six_eight_amount: float = 6,
-        shooter_budget: float = 6 * self.pass_come_amount,
-        bankroll_new_shooter: float = 0,
         ):
         
         super().__init__()
         self.pass_come_amount = float(pass_come_amount)
         self.six_eight_amount = float(six_eight_amount)
-
+        self.shooter_budget: float = 6 * self.pass_come_amount
+        self.bankroll_new_shooter: float = 0
 
     def completed(self, player: Player) -> bool:
         """The strategy is completed if the player has no bets on the table, and the players
@@ -92,7 +91,7 @@ class HeatSeeker(Strategy):
         A list of integers of the points for the PassLine and Come bets.
         """
         pass_line_come_points = []
-        for number in (6, 8, 9, 10):
+        for number in (4, 5, 6, 8, 9, 10):
             if (
                 player.table.point.number == number
                 and PassLine(self.pass_come_amount) in player.bets
@@ -112,89 +111,65 @@ class HeatSeeker(Strategy):
         player
             The player to check on and make the bets for.
         """
-        points_bet = []
-
-        for x in player.bets:
-            if isinstance(x, (PassLine, Come)):
-                points_bet.append(x.number)
-            if isinstance(x, (Place)):
-                player.remove_bet(x)        # Remove all Place bets.  Will add back later if allowed. 
-                                            # This simplifies the code by reducing the match - case conditions.
         
+        # Remove all Place bets.  Will add back later if allowed.
+        # This simplifies the code by reducing the match - case conditions.
+        for x in player.bets:
+            if isinstance(x, (Place)):
+                player.remove_bet(x)        
+
+        points_bet = self.get_pass_line_come_points(player)
         pass_come_count = len(points_bet)
 
-        if table.new_shooter:
+        # No bets on new shooter's 1st roll
+        # Save the bankroll at Shooter's 1st roll to enforce per-shooter budget -- TBD
+        if table.new_shooter:   
             self.bankroll_new_shooter = player.bankroll
             if player.bankroll >= 6 * self.pass_come_amount:
                 self.shooter_budget = 6 * self.pass_come_amount
             else:
                 self.shooter_budget = player.bankroll
-            return  #No updates on new shooter 1st roll
+            return  
         
-        if (pass_come_count == 0) and (table.point.status == "Off"):
-            return #No updates - wait for a point to be established by other players
-
-        if (pass_come_count == 0) and (table.point.status == "On"):
-            #Start strategy with come and 6/8 place bets
-            BetCome(self.pass_come_amount).update_bets(player)
-            BetPlace({6: self.six_eight_amount, 8: self.six_eight_amount}, skip_point=True)
-            return 
-
-
         match pass_come_count:
-            case 0:
+            case 0 | 1:
             # Add up to 3 new bets: Come/PassLine and 6 and/or 8 where not a point
-                if table.point.number == "On":
-                    BetCome(self.pass_come_amount).update_bets(player)
-                else:
-                    BetPassLine(self.pass_come_amount).update_bets(player)
+                BetCome(self.pass_come_amount, StrategyMode.ADD_IF_POINT_ON)
+                BetPassLine(self.pass_come_amount, StrategyMode.ADD_IF_POINT_OFF)
 
                 if (6 not in points_bet):   #Place the 6 if not a point
-                    BetPlace({6: self.six_eight_amount, 8: self.six_eight_amount}, skip_point=True).update_bets(player)
+                    BetPlace({6: self.six_eight_amount}, skip_point=False).update_bets(player)
                 if (8 not in points_bet):   #Place the 8 if not a point
-                    BetPlace({8: self.six_eight_amount}, skip_point=True).update_bets(player)
-                return
-            
-            case 1:
-                # Add up to 3 new bets: Come/PassLine and 6 and/or 8 where not a point
-                if (6 not in points_bet):   #Place the 6 if not a point
-                    BetPlace({6: self.six_eight_amount, 8: self.six_eight_amount}, skip_point=True).update_bets(player)
-                if (8 not in points_bet):   #Place the 8 if not a point
-                    BetPlace({8: self.six_eight_amount}, skip_point=True).update_bets(player)
-
-                if table.point.number == "On":
-                    BetCome(self.pass_come_amount).update_bets(player)
-                else:
-                    BetPassLine(self.pass_come_amount).update_bets(player)
+                    BetPlace({8: self.six_eight_amount}, skip_point=False).update_bets(player)
                 return
             
             case 2: #Add up to 2 new bets
                 place_count = 0
+                #prefer to Place 6 or 8 before Come/ PassLine
                 if (6 not in points_bet) or (8 not in points_bet):
                     if (6 not in points_bet):
-                        BetPlace({6: self.six_eight_amount, 8: self.six_eight_amount}, skip_point=True).update_bets(player)
+                        BetPlace({6: self.six_eight_amount}, skip_point=False).update_bets(player)
                         place_count += 1    
                     elif (8 not in points_bet):
-                        BetPlace({8: self.six_eight_amount}, skip_point=True).update_bets(player)
+                        BetPlace({8: self.six_eight_amount}, skip_point=False).update_bets(player)
                         place_count += 1
-                    return  #prefer to Place 6 or 8 before Come/ PassLine
+                    return  
                 
                 if place_count <= 1:    #Add a Come/PassLine bet too if 0 or 1 Place bets made.
-                    if table.point.number == "On":  #add Come or PassLine bet
-                        BetCome(self.pass_come_amount).update_bets(player)
-                    else:
-                        BetPassLine(self.pass_come_amount).update_bets(player)
+                    BetCome(self.pass_come_amount, StrategyMode.ADD_IF_POINT_ON)
+                    BetPassLine(self.pass_come_amount, StrategyMode.ADD_IF_POINT_OFF)
                     return
             
             case 3: # Add a Come/PassLine bet -- allowed since it wins on a 7 and up to 4 points are allowed.
                     # Adding a Place bet is not allowed because > 3 units at risk
-                if table.point.number == "On":
-                    BetCome(self.pass_come_amount).update_bets(player)
-                else:
-                    BetPassLine(self.pass_come_amount).update_bets(player)
+                BetCome(self.pass_come_amount, StrategyMode.ADD_IF_POINT_ON)
+                BetPassLine(self.pass_come_amount, StrategyMode.ADD_IF_POINT_OFF)
                 return
             
-            case 4 | 5 : # This case should never run.  TBD raise an exemption
+            case 4 : # No new bets - Max 4 points covered.
+                return
+            
+            case 5 : # This case should never run.  TBD raise an exemption
                 return
         
     def __repr__(self) -> str:
